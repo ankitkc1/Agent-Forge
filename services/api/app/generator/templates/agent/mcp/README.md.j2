@@ -1,0 +1,33 @@
+# MCP server
+
+`mcp/server.py` exposes this agent to Model Context Protocol clients (Claude Desktop, IDEs and
+other agents).
+
+| MCP tool | Purpose |
+| --- | --- |
+{%- for tool in read_tools %}
+| `{{ tool.name }}` | {{ tool.description|md }} (read-only) |
+{%- endfor %}
+{%- if retrieval.enabled %}
+| `search_knowledge` | Cited passages from approved sources |
+{%- endif %}
+| `run_agent` | Run the full agent workflow on a request |
+| `get_run` | Read a run's state |
+
+Draft and execute tools are **not** exposed. Side effects only happen through the graph, and
+approvals require an approver key on the HTTP API (`POST /v1/runs/{run_id}/approval`). Configure a
+shared `CHECKPOINT_BACKEND` (sqlite or postgres) so runs started over MCP can be approved over HTTP.
+
+## Run
+
+```bash
+pip install -e ".[mcp]"
+python mcp/server.py                                     # stdio
+python mcp/server.py --transport streamable-http --port 8001
+docker compose --profile mcp up                          # containerised, port 8001
+```
+
+## Client configuration
+
+`mcp/mcp.json` is a ready-to-adapt client entry. Run the client from the repository root (or set
+`cwd`) so `mcp/server.py` and `data/` resolve.

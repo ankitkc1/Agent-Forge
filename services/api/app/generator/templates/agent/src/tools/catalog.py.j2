@@ -1,0 +1,21 @@
+"""Tool allowlist. Only tools listed here can ever be invoked — by the graph, the API or MCP."""
+
+from __future__ import annotations
+
+from enum import StrEnum
+
+from src.tools import {% for tool in tools|sort(attribute="name") %}{{ tool.name|ident }}{% if not loop.last %}, {% endif %}{% endfor %}
+from src.tools.base import ToolDefinition
+
+
+class ToolName(StrEnum):
+{%- for tool in tools %}
+    {{ tool.name|upper|ident_upper }} = {{ tool.name|py }}
+{%- endfor %}
+
+
+DEFINITIONS: tuple[ToolDefinition, ...] = (
+{%- for tool in tools %}
+    {{ tool.name|ident }}.DEFINITION,
+{%- endfor %}
+)

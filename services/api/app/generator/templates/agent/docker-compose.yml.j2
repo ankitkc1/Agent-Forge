@@ -1,0 +1,84 @@
+name: {{ agent.package }}
+
+x-agent: &agent
+  build: .
+  env_file:
+    - path: .env
+      required: false
+  environment:
+{%- if uses_postgres %}
+    DATABASE_URL: postgresql+psycopg://agent:${POSTGRES_PASSWORD:-change-me}@postgres:5432/agent
+{%- else %}
+    DATABASE_URL: sqlite:////app/var/agent.db
+    CHECKPOINT_URL: /app/var/checkpoints.sqlite
+{%- endif %}
+{%- if model.provider == "local" %}
+    MODEL_BASE_URL: ${COMPOSE_MODEL_BASE_URL:-http://ollama:11434/v1}
+{%- endif %}
+  read_only: true
+  tmpfs:
+    - /tmp:size=64m
+  volumes:
+    - agent_var:/app/var
+  security_opt:
+    - no-new-privileges:true
+  cap_drop:
+    - ALL
+  restart: unless-stopped
+{%- if uses_postgres %}
+  depends_on:
+    postgres:
+      condition: service_healthy
+{%- endif %}
+
+services:
+  agent:
+    <<: *agent
+    ports:
+      - "${AGENT_PORT:-8000}:8000"
+
+  mcp:
+    <<: *agent
+    profiles: ["mcp"]
+    command: ["python", "mcp/server.py", "--transport", "streamable-http", "--host", "0.0.0.0", "--port", "8001"]
+    ports:
+      - "${MCP_PORT:-8001}:8001"
+{%- if uses_postgres %}
+
+  postgres:
+    image: {{ postgres_image }}
+    environment:
+      POSTGRES_USER: agent
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change-me}
+      POSTGRES_DB: agent
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agent -d agent"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+{%- endif %}
+{%- if model.provider == "local" %}
+
+  ollama:
+    image: ollama/ollama:${OLLAMA_VERSION:-{{ ollama_version }}}
+    profiles: ["local-llm"]
+    volumes:
+      - ollama_models:/root/.ollama
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+{%- endif %}
+
+volumes:
+  agent_var: {}
+{%- if uses_postgres %}
+  postgres_data: {}
+{%- endif %}
+{%- if model.provider == "local" %}
+  ollama_models: {}
+{%- endif %}

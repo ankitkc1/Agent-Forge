@@ -1,0 +1,170 @@
+name: agentforge
+
+# Single-host stack: web (nginx + workbench), api, worker, beat, postgres, redis.
+#
+#   cp .env.example .env && docker compose up --build
+#
+# The worker executes generated repositories in the process sandbox (a separate, hash-locked
+# virtualenv with kernel resource limits). It joins only the internal "backend" network, which has
+# no route to the internet, so generated code cannot call out. For multi-tenant or internet-facing
+# deployments use the Docker sandbox backend with gVisor on a dedicated daemon (docs/operations.md).
+
+x-control-plane: &control-plane
+  image: agentforge/api:${AGENTFORGE_VERSION:-1.0.0}
+  build:
+    context: ./services/api
+    dockerfile: Dockerfile
+  env_file:
+    - path: .env
+      required: false
+  environment:
+    AGENTFORGE_ENV: ${AGENTFORGE_ENV:-development}
+    AGENTFORGE_DATABASE_URL: ${AGENTFORGE_DATABASE_URL:-postgresql+psycopg://agentforge:agentforge@postgres:5432/agentforge}
+    AGENTFORGE_REDIS_URL: ${AGENTFORGE_REDIS_URL:-redis://redis:6379/0}
+    AGENTFORGE_ARTIFACT_ROOT: /var/lib/agentforge/artifacts
+    AGENTFORGE_SANDBOX_BACKEND: process
+    AGENTFORGE_SANDBOX_PYTHON: /opt/agent-runtime/bin/python
+  depends_on:
+    postgres:
+      condition: service_healthy
+    redis:
+      condition: service_healthy
+  volumes:
+    - artifacts:/var/lib/agentforge/artifacts
+  read_only: true
+  tmpfs:
+    - /tmp:size=256m
+  security_opt:
+    - no-new-privileges:true
+  cap_drop: [ALL]
+  restart: unless-stopped
+  init: true
+
+services:
+  web:
+    image: agentforge/web:${AGENTFORGE_VERSION:-1.0.0}
+    build:
+      context: ./apps/web
+      dockerfile: Dockerfile
+      args:
+        VITE_API_BASE_URL: /api/v1
+    ports:
+      # Loopback only by default; put TLS and an authenticating proxy in front for remote access.
+      - "${AGENTFORGE_WEB_BIND:-127.0.0.1}:${AGENTFORGE_WEB_PORT:-8080}:8080"
+    depends_on:
+      api:
+        condition: service_healthy
+    networks: [frontend]
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m,mode=1777
+    security_opt:
+      - no-new-privileges:true
+    cap_drop: [ALL]
+
+  api:
+    <<: *control-plane
+    command: ["sh", "-c", "alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2 --proxy-headers --forwarded-allow-ips=*"]
+    expose: ["8000"]
+    networks: [frontend, backend]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health/ready', timeout=2)"]
+      interval: 10s
+      timeout: 3s
+      retries: 12
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          memory: 768M
+
+  worker:
+    <<: *control-plane
+    command: ["celery", "-A", "app.tasks.celery_app:celery", "worker", "--loglevel=INFO", "--queues=builds", "--concurrency=${AGENTFORGE_WORKER_CONCURRENCY:-2}", "--max-tasks-per-child=25"]
+    # Internal network only: generated code under test has no route to the internet.
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.tasks.celery_app:celery inspect ping -d celery@$$HOSTNAME --timeout=5 | grep -q pong"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+          cpus: "2.0"
+          pids: 2048
+
+  beat:
+    <<: *control-plane
+    # Schedules retention purges; runs them on the maintenance queue, consumed by the worker below.
+    command: ["celery", "-A", "app.tasks.celery_app:celery", "beat", "--loglevel=INFO", "--schedule=/tmp/celerybeat-schedule"]
+    networks: [backend]
+    # The image-level HTTP probe is only valid for the API process. Celery beat has no
+    # network health endpoint; Docker already monitors whether its foreground process exits.
+    healthcheck:
+      disable: true
+    deploy:
+      resources:
+        limits:
+          memory: 256M
+
+  maintenance:
+    <<: *control-plane
+    command: ["celery", "-A", "app.tasks.celery_app:celery", "worker", "--loglevel=INFO", "--queues=maintenance", "--concurrency=1"]
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.tasks.celery_app:celery inspect ping -d celery@$$HOSTNAME --timeout=5 | grep -q pong"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    deploy:
+      resources:
+        limits:
+          memory: 384M
+
+  postgres:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-agentforge}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-agentforge}
+      POSTGRES_DB: ${POSTGRES_DB:-agentforge}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks: [backend]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-agentforge} -d ${POSTGRES_DB:-agentforge}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+  redis:
+    image: redis:7.4-alpine
+    command: ["redis-server", "--appendonly", "yes", "--maxmemory", "256mb", "--maxmemory-policy", "noeviction"]
+    volumes:
+      - redis_data:/data
+    networks: [backend]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+
+networks:
+  frontend: {}
+  backend:
+    internal: true
+
+volumes:
+  postgres_data: {}
+  redis_data: {}
+  artifacts: {}

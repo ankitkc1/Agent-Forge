@@ -1,0 +1,58 @@
+.runtime-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: #657069;
+  font-size: 9px;
+  font-weight: 600;
+}
+
+.runtime-badge .pulse { width: 6px; height: 6px; }
+
+.error-banner {
+  display: grid;
+  grid-template-columns: 28px 1fr auto;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 12px 14px;
+  border: 1px solid #efc4c4;
+  border-radius: 10px;
+  background: #fff7f7;
+  color: #873e3e;
+}
+
+.error-banner > svg { width: 20px; height: 20px; }
+.error-banner > div { display: flex; flex-direction: column; gap: 2px; }
+.error-banner strong { font-size: 10px; }
+.error-banner span { color: #a06767; font-size: 9px; }
+.error-banner button { border: 1px solid #e7baba; background: #fff; border-radius: 6px; padding: 6px 9px; display: flex; gap: 5px; align-items: center; cursor: pointer; font-size: 8px; }
+.error-banner button svg { width: 12px; height: 12px; }
+
+.failed-panel {
+  margin-top: 16px;
+  padding: 20px;
+  display: flex;
+  gap: 13px;
+  align-items: flex-start;
+  border-color: #efc4c4;
+  background: #fff9f9;
+}
+
+.failed-panel > svg { width: 24px; height: 24px; color: var(--danger); }
+.failed-panel h2 { margin: 0 0 4px; font: 600 15px Manrope, sans-serif; }
+.failed-panel p { margin: 0; color: #8d6b6b; font-size: 10px; }
+
+.mobile-menu svg { width: 18px; height: 18px; }
+.pipeline-node.failed { border-color: #e6adad; background: #fff7f7; }
+.run-button:disabled, .primary-button:disabled { opacity: .62; cursor: wait; transform: none; }
+
+@media (max-width: 760px) {
+  .runtime-badge { display: none; }
+}
+

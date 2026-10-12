@@ -1,0 +1,96 @@
+"""Model Context Protocol server for {{ agent.display_name }}.
+
+Exposes the read-only tools{% if retrieval.enabled %}, knowledge search{% endif %} and agent runs to MCP
+clients. Draft and execute tools are deliberately *not* exposed: side effects only happen
+through the graph's approval flow, and approvals require an approver key on the HTTP API.
+
+Run with ``python mcp/server.py`` (stdio) or
+``python mcp/server.py --transport streamable-http --port 8001``.
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import contextlib
+from typing import Any
+
+from src.agent import blueprint
+from src.agent.graph import build_graph
+from src.agent.runtime import AgentRuntime
+from src.agent.service import AgentService
+from src.config import get_settings
+from src.memory.checkpointer import open_checkpointer
+from src.tools.base import ToolContext
+
+_state: dict[str, Any] = {}
+_lock = asyncio.Lock()
+
+
+async def get_service() -> AgentService:
+    async with _lock:
+        if "service" not in _state:
+            settings = get_settings()
+            stack = contextlib.AsyncExitStack()
+            checkpointer = await stack.enter_async_context(open_checkpointer(settings))
+            runtime = await AgentRuntime.create(settings)
+            _state.update(stack=stack, service=AgentService(runtime, build_graph(runtime, checkpointer)))
+    return _state["service"]
+
+
+async def call_read_tool(name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+    service = await get_service()
+    ctx = ToolContext(run_id="mcp", thread_id="mcp", request_id="mcp", phase="read")
+    result = await service.runtime.tools.invoke(name, arguments, phase="read", ctx=ctx)
+    return result.as_dict()
+
+
+def create_server() -> Any:
+    try:
+        from mcp.server.mcpserver import MCPServer
+        from mcp.types import ToolAnnotations
+    except ImportError as exc:  # pragma: no cover - depends on optional extra
+        raise SystemExit("Install the MCP extra: pip install -e '.[mcp]'") from exc
+
+    server = MCPServer(name=blueprint.AGENT_NAME, instructions=blueprint.OBJECTIVE)
+    read_only = ToolAnnotations(readOnlyHint=True, destructiveHint=False, idempotentHint=True, openWorldHint=False)
+{% for tool in read_tools %}
+    @server.tool(name={{ tool.name|py }}, description={{ tool.description|py }}, annotations=read_only)
+    async def {{ tool.name|ident }}({{ tool.mcp_signature }}) -> dict[str, Any]:
+        return await call_read_tool({{ tool.name|py }}, {{ tool.mcp_arguments }})
+{% endfor %}
+{%- if retrieval.enabled %}
+    @server.tool(name="search_knowledge", description="Search approved knowledge sources and return cited passages.", annotations=read_only)
+    async def search_knowledge(query: str, source: str | None = None) -> dict[str, Any]:
+        service = await get_service()
+        if service.runtime.retriever is None:
+            return {"evidence": []}
+        result = await service.runtime.retriever.search(query, sources=[source] if source else None)
+        return {"evidence": [item.as_dict() for item in result.evidence]}
+{% endif %}
+    @server.tool(name="run_agent", description="Run the agent on a request. Side effects pause for human approval via the HTTP API.")
+    async def run_agent(message: str, thread_id: str | None = None) -> dict[str, Any]:
+        service = await get_service()
+        view = await service.start(message, thread_id=thread_id)
+        return view.model_dump(mode="json")
+
+    @server.tool(name="get_run", description="Read the current state of a run.", annotations=read_only)
+    async def get_run(run_id: str) -> dict[str, Any]:
+        service = await get_service()
+        view = await service.get(run_id)
+        return view.model_dump(mode="json")
+
+    return server
+
+
+def main(argv: list[str] | None = None) -> None:
+    parser = argparse.ArgumentParser(description="MCP server for " + blueprint.DISPLAY_NAME)
+    parser.add_argument("--transport", choices=["stdio", "streamable-http"], default="stdio")
+    parser.add_argument("--host", default="127.0.0.1")
+    parser.add_argument("--port", type=int, default=8001)
+    args = parser.parse_args(argv)
+    server = create_server()
+    if args.transport == "stdio":
+        server.run("stdio")
+    else:
+        server.run("streamable-http", host=args.host, port=args.port)

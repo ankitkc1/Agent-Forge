@@ -1,0 +1,60 @@
+[build-system]
+requires = ["hatchling>=1.27"]
+build-backend = "hatchling.build"
+
+[project]
+name = {{ agent.package|toml }}
+version = "0.1.0"
+description = {{ agent.objective|toml }}
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+{%- for dependency in dependencies %}
+  {{ dependency|toml }},
+{%- endfor %}
+]
+
+[project.optional-dependencies]
+mcp = ["mcp>=2,<3"]
+dev = [
+  "pytest>=8.3,<10",
+  "pytest-cov>=6,<8",
+  "ruff>=0.8,<1",
+  "bandit>=1.8,<2",
+]
+
+[project.scripts]
+{{ agent.cli }} = "src.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-ra --strict-markers --import-mode=importlib -p no:cacheprovider"
+filterwarnings = [
+  "ignore::DeprecationWarning:starlette.*",
+  "ignore::DeprecationWarning:fastapi.*",
+]
+
+[tool.coverage.run]
+source = ["src"]
+omit = ["src/cli.py", "src/mcp_server.py"]
+
+[tool.coverage.report]
+skip_empty = true
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "RUF", "ASYNC"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["src", "evals", "tests"]
+
+[tool.bandit]
+exclude_dirs = ["tests", ".venv"]

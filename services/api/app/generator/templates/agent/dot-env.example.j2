@@ -1,0 +1,37 @@
+# Copy to .env and adjust. Never commit .env.
+ENV=development
+LOG_LEVEL=INFO
+
+# Callers can start runs; approvers can also approve actions and erase memory.
+API_KEYS=change-me-dev-key
+APPROVER_API_KEYS=change-me-approver-key
+
+# Model: {{ model.provider }} / {{ model.model }}. Set MODEL_PROVIDER=offline for a key-free demo.
+MODEL_PROVIDER={{ model.provider }}
+MODEL_NAME={{ model.model }}
+{%- if model.provider == "local" %}
+MODEL_BASE_URL=http://localhost:11434/v1
+{%- endif %}
+{%- if model.provider == "openai" or retrieval.embeddings == "openai" %}
+OPENAI_API_KEY=
+{%- endif %}
+{%- if model.provider == "anthropic" %}
+ANTHROPIC_API_KEY=
+{%- endif %}
+
+# Persistence ({{ memory.type }} memory, {{ checkpoint_backend }} checkpoints)
+DATABASE_URL={{ database_url_default }}
+CHECKPOINT_BACKEND={{ checkpoint_backend }}
+{%- if uses_postgres %}
+POSTGRES_PASSWORD=change-me
+{%- endif %}
+
+# Tools: "fixture" serves data/fixtures/tools.json; "http" calls your tool gateway.
+TOOL_BACKEND=fixture
+TOOL_BACKEND_URL=
+TOOL_BACKEND_TOKEN=
+
+# Retrieval
+EMBEDDINGS={{ retrieval.embeddings }}
+VECTOR_STORE={{ retrieval.store }}
+KNOWLEDGE_DIR=data/knowledge

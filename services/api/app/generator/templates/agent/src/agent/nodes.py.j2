@@ -1,0 +1,32 @@
+"""Workflow nodes — one method per step in agent-spec.yaml.
+
+Each method delegates to a reusable archetype in ``patterns.py``. To customise a step, replace
+the body of its method; the graph wiring in ``graph.py`` and the tests stay valid as long as the
+method returns a partial ``AgentState`` update.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from src.agent import patterns
+from src.agent.blueprint import STEPS
+from src.agent.runtime import AgentRuntime
+from src.agent.state import AgentState
+
+
+class WorkflowNodes:
+    def __init__(self, runtime: AgentRuntime) -> None:
+        self.runtime = runtime
+
+    async def guard_input(self, state: AgentState) -> dict[str, Any]:
+        """Platform guard: size limits, prompt-injection scan, policy routing."""
+        return await patterns.guard_input(self.runtime, state)
+{% for step in steps %}
+    async def {{ step.id|ident }}(self, state: AgentState) -> dict[str, Any]:
+        """{{ step.docstring }}"""
+        return await patterns.{{ step.kind|ident }}(self.runtime, state, STEPS[{{ step.id|py }}])
+{% endfor %}
+    async def finalize(self, state: AgentState) -> dict[str, Any]:
+        """Platform finaliser: terminal status, final response and audit entry."""
+        return await patterns.finalize(self.runtime, state)

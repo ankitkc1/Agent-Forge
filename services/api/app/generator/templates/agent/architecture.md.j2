@@ -1,0 +1,78 @@
+# Architecture — {{ agent.display_name }}
+
+## Contract
+
+All code in this repository was derived from AgentSpec v{{ spec.version }} (`agent-spec.yaml`,
+SHA-256 `{{ spec_hash }}`). `tests/unit/test_spec.py` fails if the specification and the generated
+constants in `src/agent/blueprint.py` drift apart.
+
+## Components
+
+| Component | Technology | Notes |
+| --- | --- | --- |
+{%- for component in plan.components %}
+| {{ component.title|md }} | {{ component.technology|md }} | {{ component.detail|md }} |
+{%- endfor %}
+
+## Graph
+
+```mermaid
+{{ plan.mermaid }}```
+
+| Node | Kind | Description |
+| --- | --- | --- |
+{%- for node in plan.nodes %}
+| `{{ node.id }}` | {{ node.kind }} | {{ (node.description or node.title)|md }} |
+{%- endfor %}
+
+### Verified properties
+
+| Check | Result | Detail |
+| --- | --- | --- |
+{%- for check in plan.checks %}
+| {{ check.title|md }} | {{ "pass" if check.passed else "FAIL" }} | {{ check.detail|md }} |
+{%- endfor %}
+
+## Request lifecycle
+
+1. `guard_input` rejects empty or oversized requests and scans for prompt injection
+   ({{ guardrails.injection_action }}).
+2. Workflow steps run in order. Model calls return JSON validated against Pydantic schemas;
+   invalid output is retried once and otherwise routed to human review.
+3. Read tools run immediately; side-effecting tools become *proposed actions* with a SHA-256
+   digest of their exact arguments. Draft tools may produce side-effect-free previews.
+4. `safety_check` applies the action policy (allowlist, schema, digest integrity, secrets and
+   instruction-like content in arguments).
+5. `human_approval` interrupts the graph. The checkpointer persists the paused run; an approver
+   resumes it with an approve/reject decision, optionally for a subset of actions.
+6. `execute` re-computes every digest and runs only approved, unmodified actions.
+7. `finalize` sets the terminal status (`completed`, `blocked`, `rejected`) and the response.
+
+## Trust boundaries
+
+| Boundary | Control |
+| --- | --- |
+| User → agent | Size limit, injection scan, API-key auth, JSON-framed prompts |
+| Knowledge → agent | Source allowlist, relevance threshold, quarantine of instruction-like chunks |
+| Tools → agent | Output scanned and quarantined; results are data, never instructions |
+| Agent → external systems | Allowlist, schema validation, phase checks, timeouts, approval digests |
+| Approver → agent | Separate approver keys; reviewer identity and key fingerprint recorded |
+| Agent → storage | PII redaction for memory and logs; retention purge; per-thread erasure |
+
+## Risk register
+
+| Severity | Status | Finding | Mitigation |
+| --- | --- | --- | --- |
+{%- for finding in plan.risk.findings %}
+| {{ finding.severity }} | {{ finding.status }} | {{ finding.title|md }} — {{ finding.detail|md }} | {{ finding.mitigation|md }} |
+{%- endfor %}
+
+## Operations
+
+- **Scaling** - the API is stateless apart from the checkpointer; use `CHECKPOINT_BACKEND=postgres`
+  to run several replicas.
+- **Observability** - JSON logs (request id, run id), Prometheus metrics at `/metrics`
+  (`agent_runs_total`, `agent_node_duration_seconds`, `agent_tool_calls_total`,
+  `agent_approval_decisions_total`, `agent_guardrail_events_total`).
+- **Change management** - edit `agent-spec.yaml`, regenerate with AgentForge, review the diff,
+  and keep `make test` and `python -m evals.run` green.

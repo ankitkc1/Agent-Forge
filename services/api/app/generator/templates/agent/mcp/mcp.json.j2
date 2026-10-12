@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    {{ agent.name|json }}: {
+      "command": "python",
+      "args": ["mcp/server.py"],
+      "env": {
+        "MODEL_PROVIDER": {{ model.provider|json }},
+        "TOOL_BACKEND": "fixture"
+      }
+    }
+  }
+}

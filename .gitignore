@@ -1,0 +1,38 @@
+# Local configuration
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+coverage.xml
+htmlcov/
+.venv/
+.venv-*/
+venv/
+*.egg-info/
+*.db
+
+# Node
+node_modules/
+apps/web/.vite/
+/dist/
+apps/web/dist/
+apps/web/coverage/
+
+# Runtime data (anchored: the generator's templates contain data/ directories that must be tracked)
+/data/
+/artifacts/
+services/api/artifacts/
+*.log
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

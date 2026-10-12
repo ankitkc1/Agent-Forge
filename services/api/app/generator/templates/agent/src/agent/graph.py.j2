@@ -1,0 +1,47 @@
+"""LangGraph state graph for {{ agent.display_name }}.
+
+Topology (verified by AgentForge and by tests/integration/test_graph_topology.py):
+
+{{ topology_diagram }}
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from langgraph.checkpoint.base import BaseCheckpointSaver
+from langgraph.checkpoint.memory import InMemorySaver
+from langgraph.graph import END, START, StateGraph
+
+from src.agent import patterns
+from src.agent.nodes import WorkflowNodes
+from src.agent.runtime import AgentRuntime
+from src.agent.state import AgentState
+
+
+def build_graph(runtime: AgentRuntime, checkpointer: BaseCheckpointSaver | None = None) -> Any:
+    """Compile the graph. A checkpointer is required for human-approval interrupts."""
+    nodes = WorkflowNodes(runtime)
+    graph = StateGraph(AgentState)
+
+    graph.add_node("guard_input", nodes.guard_input)
+{%- for step in steps %}
+    graph.add_node({{ step.id|py }}, nodes.{{ step.id|ident }})
+{%- endfor %}
+    graph.add_node("finalize", nodes.finalize)
+
+    graph.add_edge(START, "guard_input")
+{%- for edge in wiring %}
+{%- if edge.type == "conditional" %}
+    graph.add_conditional_edges(
+        {{ edge.source|py }},
+        patterns.{{ edge.router|ident }},
+        {{ edge.mapping|py }},
+    )
+{%- else %}
+    graph.add_edge({{ edge.source|py }}, {{ edge.target|py }})
+{%- endif %}
+{%- endfor %}
+    graph.add_edge("finalize", END)
+
+    return graph.compile(checkpointer=checkpointer or InMemorySaver())

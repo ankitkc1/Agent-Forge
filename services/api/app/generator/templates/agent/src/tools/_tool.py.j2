@@ -1,0 +1,44 @@
+"""{{ tool.docstring }}
+
+Mode: {{ tool.mode }} — {{ tool.mode_explanation }}
+Approval required: {{ "yes" if tool.approval_required else "no" }} · Timeout: {{ tool.timeout_seconds }}s
+
+Integration point: the default handler forwards to the configured backend (fixtures in
+development, your HTTP tool gateway in production). Replace ``handle`` to call an SDK directly.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from src.tools.base import ToolBackend, ToolContext, ToolDefinition, ToolMode
+
+
+class {{ tool.class_name }}(BaseModel):
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+{% for field in tool.fields %}
+    {{ field.name|ident }}: {{ field.annotation }} = Field(
+        {{ field.default_expr }},
+        description={{ field.description|py }},
+{%- for key, value in field.constraints %}
+        {{ key }}={{ value }},
+{%- endfor %}
+    )
+{%- endfor %}
+
+
+async def handle(arguments: {{ tool.class_name }}, backend: ToolBackend, ctx: ToolContext) -> dict[str, Any]:
+    return await backend.call({{ tool.name|py }}, ctx.phase, arguments.model_dump(mode="json"), ctx)
+
+
+DEFINITION = ToolDefinition(
+    name={{ tool.name|py }},
+    description={{ tool.description|py }},
+    mode=ToolMode.{{ tool.mode|upper }},
+    approval_required={{ tool.approval_required|py }},
+    timeout_seconds={{ tool.timeout_seconds }}.0,
+    input_model={{ tool.class_name }},
+    handler=handle,
+)
