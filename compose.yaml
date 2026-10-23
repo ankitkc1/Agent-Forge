@@ -1,5 +1,11 @@
 name: agentforge
 
+x-logging: &default-logging
+  driver: local
+  options:
+    max-size: "10m"
+    max-file: "5"
+
 # Single-host stack: web (nginx + workbench), api, worker, beat, postgres, redis.
 #
 #   cp .env.example .env && docker compose up --build
@@ -39,6 +45,7 @@ x-control-plane: &control-plane
   cap_drop: [ALL]
   restart: unless-stopped
   init: true
+  logging: *default-logging
 
 services:
   web:
@@ -62,6 +69,7 @@ services:
     security_opt:
       - no-new-privileges:true
     cap_drop: [ALL]
+    logging: *default-logging
 
   api:
     <<: *control-plane
@@ -96,6 +104,7 @@ services:
           memory: 4G
           cpus: "2.0"
           pids: 2048
+    stop_grace_period: 1m
 
   beat:
     <<: *control-plane
@@ -143,6 +152,7 @@ services:
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
+    logging: *default-logging
 
   redis:
     image: redis:7.4-alpine
@@ -158,6 +168,7 @@ services:
     restart: unless-stopped
     security_opt:
       - no-new-privileges:true
+    logging: *default-logging
 
 networks:
   frontend: {}

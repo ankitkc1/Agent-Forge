@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import contextlib
+import hmac
 import json
 import uuid
 from collections.abc import AsyncIterator
@@ -19,7 +21,13 @@ from app.db.session import SessionLocal
 from app.models.build import BuildRecord
 from app.schemas.build import BuildCreate, BuildEventRead, BuildPage, BuildRead, FileContent, FileEntry
 from app.services import builds as service
-from app.services.artifacts import ArtifactAccessError, list_files, read_file, resolve_artifact
+from app.services.artifacts import (
+    ArtifactAccessError,
+    artifact_sha256,
+    list_files,
+    read_file,
+    resolve_artifact,
+)
 from app.tasks.pipeline import run_build
 
 router = APIRouter(prefix="/builds", tags=["builds"])
@@ -27,8 +35,14 @@ STREAM_INTERVAL_SECONDS = 0.75
 STREAM_MAX_SECONDS = 30 * 60
 
 
-def _get_or_404(db: DbSession, build_id: uuid.UUID) -> BuildRecord:
-    record = service.get_build(db, build_id)
+def _owner(principal: CurrentPrincipal) -> str | None:
+    # Development mode is intentionally a shared workspace. Authenticated deployments are private
+    # per principal; returning 404 avoids disclosing whether another user's build exists.
+    return None if principal.method == "none" else principal.id
+
+
+def _get_or_404(db: DbSession, build_id: uuid.UUID, principal: CurrentPrincipal) -> BuildRecord:
+    record = service.get_build(db, build_id, requested_by=_owner(principal))
     if record is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "build not found")
     return record
@@ -100,7 +114,12 @@ def list_builds(
 ) -> BuildPage:
     try:
         records, next_cursor = service.list_builds(
-            db, limit=limit, cursor=cursor, status=status_filter, agent=agent
+            db,
+            limit=limit,
+            cursor=cursor,
+            status=status_filter,
+            agent=agent,
+            requested_by=_owner(principal),
         )
     except (ValueError, KeyError) as exc:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "invalid cursor") from exc
@@ -109,7 +128,7 @@ def list_builds(
 
 @router.get("/{build_id}", response_model=BuildRead)
 def get_build(build_id: uuid.UUID, db: DbSession, principal: CurrentPrincipal) -> BuildRead:
-    return service.to_read(db, _get_or_404(db, build_id))
+    return service.to_read(db, _get_or_404(db, build_id, principal))
 
 
 @router.get("/{build_id}/events", response_model=list[BuildEventRead])
@@ -119,22 +138,24 @@ def get_events(
     principal: CurrentPrincipal,
     after: Annotated[int, Query(ge=0)] = 0,
 ) -> list[BuildEventRead]:
-    _get_or_404(db, build_id)
+    _get_or_404(db, build_id, principal)
     return [BuildEventRead.model_validate(event) for event in service.events_after(db, build_id, after)]
 
 
 @router.get("/{build_id}/report")
 def get_report(build_id: uuid.UUID, db: DbSession, principal: CurrentPrincipal) -> dict[str, Any]:
-    return service.report_payload(_get_or_404(db, build_id))
+    return service.report_payload(_get_or_404(db, build_id, principal))
 
 
 @router.get("/{build_id}/stream")
 async def stream_build(
     build_id: uuid.UUID, request: Request, principal: CurrentPrincipal
 ) -> StreamingResponse:
+    owner = _owner(principal)
+
     def snapshot(after: int) -> tuple[dict[str, Any] | None, list[dict[str, Any]]]:
         with SessionLocal() as session:
-            record = service.get_build(session, build_id)
+            record = service.get_build(session, build_id, requested_by=owner)
             if record is None:
                 return None, []
             build = service.to_read(session, record).model_dump(mode="json")
@@ -182,7 +203,7 @@ async def stream_build(
 
 @router.post("/{build_id}/cancel", response_model=BuildRead, status_code=status.HTTP_202_ACCEPTED)
 def cancel_build(build_id: uuid.UUID, db: DbSession, principal: CurrentPrincipal) -> BuildRead:
-    record = _get_or_404(db, build_id)
+    record = _get_or_404(db, build_id, principal)
     try:
         record = service.request_cancel(db, record)
     except service.BuildConflictError as exc:
@@ -196,7 +217,7 @@ def cancel_build(build_id: uuid.UUID, db: DbSession, principal: CurrentPrincipal
 
 @router.post("/{build_id}/retry", response_model=BuildRead, status_code=status.HTTP_202_ACCEPTED)
 def retry_build(build_id: uuid.UUID, db: DbSession, principal: CurrentPrincipal) -> BuildRead:
-    original = _get_or_404(db, build_id)
+    original = _get_or_404(db, build_id, principal)
     if not original.terminal:
         raise HTTPException(status.HTTP_409_CONFLICT, "only finished builds can be retried")
     from app.schemas.agent_spec import AgentSpec
@@ -219,7 +240,7 @@ def retry_build(build_id: uuid.UUID, db: DbSession, principal: CurrentPrincipal)
 
 @router.delete("/{build_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_build(build_id: uuid.UUID, db: DbSession, principal: CurrentPrincipal) -> Response:
-    record = _get_or_404(db, build_id)
+    record = _get_or_404(db, build_id, principal)
     try:
         service.delete_build(db, record, get_settings().artifact_root)
     except service.BuildConflictError as exc:
@@ -231,19 +252,24 @@ def _artifact_or_error(record: BuildRecord):  # type: ignore[no-untyped-def]
     if not record.artifact_ready:
         raise HTTPException(status.HTTP_409_CONFLICT, "artifact is not ready")
     try:
-        return resolve_artifact(get_settings().artifact_root, record.artifact_path)
+        artifact = resolve_artifact(get_settings().artifact_root, record.artifact_path)
     except ArtifactAccessError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from exc
+    if record.artifact_sha256:
+        actual = artifact_sha256(artifact)
+        if not hmac.compare_digest(actual, record.artifact_sha256):
+            raise HTTPException(status.HTTP_409_CONFLICT, "artifact failed its integrity check")
+    return artifact
 
 
 @router.get("/{build_id}/files", response_model=list[FileEntry])
 def get_files(build_id: uuid.UUID, db: DbSession, principal: CurrentPrincipal) -> list[FileEntry]:
-    return list_files(_artifact_or_error(_get_or_404(db, build_id)))
+    return list_files(_artifact_or_error(_get_or_404(db, build_id, principal)))
 
 
 @router.get("/{build_id}/files/{path:path}", response_model=FileContent)
 def get_file(build_id: uuid.UUID, path: str, db: DbSession, principal: CurrentPrincipal) -> FileContent:
-    artifact = _artifact_or_error(_get_or_404(db, build_id))
+    artifact = _artifact_or_error(_get_or_404(db, build_id, principal))
     try:
         return read_file(artifact, path)
     except ArtifactAccessError as exc:
@@ -253,11 +279,13 @@ def get_file(build_id: uuid.UUID, path: str, db: DbSession, principal: CurrentPr
 
 @router.get("/{build_id}/artifact")
 def download_artifact(build_id: uuid.UUID, db: DbSession, principal: CurrentPrincipal) -> FileResponse:
-    record = _get_or_404(db, build_id)
+    record = _get_or_404(db, build_id, principal)
     artifact = _artifact_or_error(record)
     filename = f"{record.agent_name.replace('_', '-')}-agent-{str(record.id)[:8]}.zip"
     headers = {}
     if record.artifact_sha256:
+        digest = base64.b64encode(bytes.fromhex(record.artifact_sha256)).decode()
         headers["X-Artifact-SHA256"] = record.artifact_sha256
-        headers["Digest"] = f"sha-256={record.artifact_sha256}"
+        headers["Digest"] = f"sha-256={digest}"
+        headers["Content-Digest"] = f"sha-256=:{digest}:"
     return FileResponse(artifact, media_type="application/zip", filename=filename, headers=headers)

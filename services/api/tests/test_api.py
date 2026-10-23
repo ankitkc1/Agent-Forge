@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import uuid
+from base64 import b64decode
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -14,6 +15,7 @@ from app.compiler.templates import TEMPLATES_BY_ID
 from app.core.config import get_settings
 from app.models.build import BuildRecord
 from app.packaging.archive import build_package, provenance_statement
+from app.packaging.signing import generate_key
 
 REQUIREMENT = TEMPLATES_BY_ID["maintenance-triage"].requirement
 
@@ -195,6 +197,25 @@ def test_inline_dispatch_is_refused_in_production() -> None:
         )
 
 
+def test_production_requires_a_valid_signing_key() -> None:
+    from app.core.config import Settings
+
+    production = {
+        "_env_file": None,
+        "env": "production",
+        "auth_mode": "api_key",
+        "api_keys": "k" * 40,
+        "database_url": "postgresql+psycopg://svc:strong@db/agentforge",
+    }
+    with pytest.raises(ValueError, match="SIGNING_KEY is required"):
+        Settings(**production)  # type: ignore[arg-type]
+    with pytest.raises(ValueError, match="SIGNING_KEY is invalid"):
+        Settings(**production, signing_key="not-a-key")  # type: ignore[arg-type]
+    seed, _ = generate_key()
+    settings = Settings(**production, signing_key=seed)  # type: ignore[arg-type]
+    assert settings.env == "production"
+
+
 def test_trusted_header_authentication(
     client: TestClient, settings_env: pytest.MonkeyPatch, task: FakeTask
 ) -> None:
@@ -212,6 +233,29 @@ def test_trusted_header_authentication(
         headers={"X-Forwarded-Email": "dana@example.com"},
     )
     assert created.json()["requested_by"] == "dana@example.com"
+
+
+def test_authenticated_builds_and_idempotency_keys_are_scoped_to_principal(
+    client: TestClient, settings_env: pytest.MonkeyPatch, task: FakeTask
+) -> None:
+    settings_env.setenv("AGENTFORGE_AUTH_MODE", "trusted_header")
+    get_settings.cache_clear()
+    dana = {"X-Forwarded-Email": "dana@example.com", "Idempotency-Key": "shared-key"}
+    lee = {"X-Forwarded-Email": "lee@example.com", "Idempotency-Key": "shared-key"}
+    compiled = client.post("/api/v1/specs/compile", json={"requirement": REQUIREMENT}, headers=dana).json()
+    payload = {"spec": compiled["spec"], "spec_hash": compiled["spec_hash"]}
+    dana_build = client.post("/api/v1/builds", json=payload, headers=dana)
+    lee_build = client.post("/api/v1/builds", json=payload, headers=lee)
+
+    assert dana_build.status_code == 202 and lee_build.status_code == 202
+    assert dana_build.json()["id"] != lee_build.json()["id"]
+    assert [item["id"] for item in client.get("/api/v1/builds", headers=dana).json()["items"]] == [
+        dana_build.json()["id"]
+    ]
+    assert client.get(f"/api/v1/builds/{lee_build.json()['id']}", headers=dana).status_code == 404
+    assert client.post(f"/api/v1/builds/{lee_build.json()['id']}/cancel", headers=dana).status_code == 404
+    assert client.get("/api/v1/specs/schema").status_code == 401
+    assert client.get("/api/v1/specs/schema", headers=dana).status_code == 200
 
 
 def test_system_templates_and_schema(client: TestClient) -> None:
@@ -280,7 +324,24 @@ def test_files_preview_and_download(client: TestClient, session_factory) -> None
     download = client.get(f"/api/v1/builds/{build_id}/artifact")
     assert download.status_code == 200
     assert download.headers["X-Artifact-SHA256"] == hashlib.sha256(download.content).hexdigest()
+    assert (
+        b64decode(download.headers["Digest"].removeprefix("sha-256="))
+        == hashlib.sha256(download.content).digest()
+    )
+    assert download.headers["Content-Digest"].startswith("sha-256=:")
     assert client.get(f"/api/v1/builds/{build_id}/report").json()["package"]["archive_sha256"]
+
+
+def test_tampered_artifact_is_not_downloaded(client: TestClient, session_factory) -> None:  # type: ignore[no-untyped-def]
+    build_id = _succeeded_build_with_artifact(session_factory, get_settings().artifact_root)
+    with session_factory() as session:
+        record = session.get(BuildRecord, uuid.UUID(build_id))
+        assert record is not None and record.artifact_path
+        Path(record.artifact_path).write_bytes(b"tampered")
+    response = client.get(f"/api/v1/builds/{build_id}/artifact")
+    assert response.status_code == 409
+    assert response.json()["detail"] == "artifact failed its integrity check"
+    assert client.get(f"/api/v1/builds/{build_id}/files").status_code == 409
 
 
 def test_stream_of_finished_build(client: TestClient, session_factory) -> None:  # type: ignore[no-untyped-def]

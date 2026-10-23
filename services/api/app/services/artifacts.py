@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import zipfile
 from pathlib import Path, PurePosixPath
 
@@ -30,6 +31,14 @@ SPECIAL = {"Dockerfile": "dockerfile", "Makefile": "makefile", ".env.example": "
 
 class ArtifactAccessError(LookupError):
     pass
+
+
+def artifact_sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def resolve_artifact(artifact_root: Path, artifact_path: str | None) -> Path:

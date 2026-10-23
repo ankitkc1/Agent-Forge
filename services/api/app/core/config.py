@@ -95,6 +95,15 @@ class Settings(BaseSettings):
                 raise ValueError(
                     "AGENTFORGE_BUILD_DISPATCH=inline is for development; run Celery workers in production"
                 )
+            signing_secret = self.signing_key.get_secret_value().strip() if self.signing_key else ""
+            if not signing_secret:
+                raise ValueError("AGENTFORGE_SIGNING_KEY is required in production")
+            from app.packaging.signing import SigningKeyError, load_signer
+
+            try:
+                load_signer(signing_secret, self.signing_key_id)
+            except SigningKeyError as exc:
+                raise ValueError("AGENTFORGE_SIGNING_KEY is invalid") from exc
         return self
 
     @property

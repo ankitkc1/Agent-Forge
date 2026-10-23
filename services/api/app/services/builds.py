@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import structlog
-from sqlalchemy import and_, delete, desc, func, or_, select
+from sqlalchemy import and_, delete, desc, func, or_, select, text
 from sqlalchemy.orm import Session
 
 from app import __version__
@@ -32,8 +32,19 @@ class CapacityError(RuntimeError):
     pass
 
 
-def get_build(session: Session, build_id: uuid.UUID) -> BuildRecord | None:
-    return session.scalar(select(BuildRecord).where(BuildRecord.id == build_id))
+def get_build(
+    session: Session, build_id: uuid.UUID, *, requested_by: str | None = None
+) -> BuildRecord | None:
+    statement = select(BuildRecord).where(BuildRecord.id == build_id)
+    if requested_by is not None:
+        statement = statement.where(BuildRecord.requested_by == requested_by)
+    return session.scalar(statement)
+
+
+def _lock_build_admission(session: Session) -> None:
+    """Serialize capacity and idempotency checks across PostgreSQL API workers."""
+    if session.get_bind().dialect.name == "postgresql":
+        session.execute(text("SELECT pg_advisory_xact_lock(1095911762)"))
 
 
 def create_build(
@@ -47,8 +58,14 @@ def create_build(
     parent_build_id: uuid.UUID | None = None,
 ) -> tuple[BuildRecord, bool]:
     """Return (record, created). Re-using an idempotency key returns the existing build."""
+    _lock_build_admission(session)
     if idempotency_key:
-        existing = session.scalar(select(BuildRecord).where(BuildRecord.idempotency_key == idempotency_key))
+        existing = session.scalar(
+            select(BuildRecord).where(
+                BuildRecord.requested_by == requested_by,
+                BuildRecord.idempotency_key == idempotency_key,
+            )
+        )
         if existing is not None:
             if existing.spec_hash != spec_hash:
                 raise BuildConflictError("Idempotency-Key was already used for a different specification")
@@ -166,8 +183,11 @@ def list_builds(
     cursor: str | None = None,
     status: str | None = None,
     agent: str | None = None,
+    requested_by: str | None = None,
 ) -> tuple[list[BuildRecord], str | None]:
     statement = select(BuildRecord).order_by(desc(BuildRecord.created_at), desc(BuildRecord.id))
+    if requested_by is not None:
+        statement = statement.where(BuildRecord.requested_by == requested_by)
     if status:
         statement = statement.where(BuildRecord.status == status)
     if agent:

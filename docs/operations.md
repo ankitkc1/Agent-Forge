@@ -19,6 +19,7 @@ observability, retention and upgrades. All settings are environment variables pr
 - `AUTH_MODE` is `none`, or `api_key` without `API_KEYS`;
 - the database URL still uses the development credentials;
 - `BUILD_DISPATCH=inline`;
+- the artifact signing key is absent or invalid;
 - the Docker sandbox is selected without a dedicated `SANDBOX_DOCKER_HOST`.
 
 Recommended baseline:
@@ -41,8 +42,11 @@ AGENTFORGE_BUILD_RETENTION_DAYS=30
 - `trusted_header`: identity comes from an authenticating reverse proxy. Only safe when that proxy is
   the sole path to the API and strips the header from incoming requests.
 
-Build records store the requesting principal (`requested_by`). `GET /api/v1/system/signing-key` is
-intentionally public; everything else under `/api/v1` requires authentication.
+Build records store the requesting principal (`requested_by`). In authenticated modes, build lists,
+events, reports, previews, downloads, retries, cancellations and deletions are scoped to that
+principal. Idempotency keys are scoped the same way, so different users can safely reuse a key.
+Development mode remains a shared workspace. `GET /api/v1/system/signing-key` is intentionally
+public; everything else under `/api/v1` requires authentication.
 
 ## Sandbox backends
 
@@ -91,6 +95,9 @@ publish the public key (`GET /api/v1/system/signing-key`). Each archive's `.agen
 is signed; `verify-artifact --public-key` checks every file, rejects added or removed files and
 detects re-signing with a different key. To rotate, deploy the new key with a new
 `AGENTFORGE_SIGNING_KEY_ID`; old archives stay verifiable with the old public key.
+
+Production mode will not start without a valid Ed25519 signing key. Development and test instances
+may still create unsigned archives so contributors can run the pipeline without production secrets.
 
 ## Observability
 

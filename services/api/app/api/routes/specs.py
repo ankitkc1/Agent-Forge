@@ -112,5 +112,5 @@ def list_domains(principal: CurrentPrincipal) -> list[dict[str, Any]]:
 
 
 @router.get("/schema")
-def spec_schema() -> dict[str, Any]:
+def spec_schema(principal: CurrentPrincipal) -> dict[str, Any]:
     return AgentSpec.model_json_schema()

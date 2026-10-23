@@ -4,7 +4,8 @@
 
 ```bash
 make bootstrap      # .venv (control plane), apps/web/node_modules, .venv-agent-runtime
-make dev            # API with in-process builds + workbench with hot reload
+make dev-api        # terminal 1: API with in-process builds and reload
+make dev-web        # terminal 2: workbench with hot reload
 ```
 
 ## Before opening a pull request

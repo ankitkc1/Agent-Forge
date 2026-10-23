@@ -1,5 +1,17 @@
 # Changelog
 
+## Unreleased
+
+- Scope authenticated build history, events, reports, artifacts and lifecycle operations to the
+  requesting principal; scope idempotency keys per principal and serialize PostgreSQL admission checks.
+- Require and validate an Ed25519 signing key at production startup, and verify an artifact's stored
+  SHA-256 digest before download.
+- Restore unbuffered live build streams in nginx, disable production source maps by default and bound
+  Compose log growth.
+- Add migration round-trip coverage, an 80% backend coverage floor, dependency auditing, generated-agent
+  CI gates and Dependabot maintenance.
+- Remove the obsolete nested copy of the earlier AgentForge implementation.
+
 ## 1.0.0
 
 AgentForge now generates real, verified agent repositories end to end. Previously the pipeline rendered

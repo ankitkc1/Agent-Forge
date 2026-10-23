@@ -71,7 +71,8 @@ Python 3.12+ and Node 22+.
 
 ```bash
 make bootstrap      # API virtualenv, web dependencies, agent runtime
-make dev            # API with in-process builds on :8000, workbench on :5173
+make dev-api        # terminal 1: API with in-process builds on :8000
+make dev-web        # terminal 2: workbench on :5173
 ```
 
 On Windows (PowerShell):
@@ -126,12 +127,12 @@ agentforge/
 ## Quality gates for AgentForge itself
 
 ```bash
-make lint test          # ruff + ESLint, pytest (240+ tests) + vitest
+make lint test          # ruff + ESLint, pytest (230+ tests) + vitest
 make test-sandbox       # full builds through the real process sandbox
 make generated          # all ten templates: generate, lint, test, evaluate
 ```
 
-CI runs the same checks, builds the three container images and verifies that each template's generated repository passes its own suite.
+CI runs the same checks, builds the container images and verifies that each template's generated repository passes its own suite.
 
 ## Documentation
 

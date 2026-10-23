@@ -28,9 +28,10 @@ redaction in logs and memory; production start-up guards.
 ## Deployment requirements
 
 - Set `AGENTFORGE_ENV=production`; it refuses development credentials, unauthenticated access and
-  in-process build execution.
+  in-process build execution, and it requires a valid Ed25519 signing key.
 - Authenticate with API key digests or an authenticating proxy (`trusted_header`) that strips the
-  identity header from client requests. Terminate TLS in front of nginx.
+  identity header from client requests. Authenticated build data is private to the requesting
+  principal. Terminate TLS in front of nginx.
 - Keep the worker on an internal network. For multi-tenant or internet-facing use, run the Docker
   sandbox on a dedicated daemon with gVisor. Never mount the host Docker socket into any AgentForge
   container.

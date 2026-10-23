@@ -15,6 +15,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     Uuid,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -35,6 +36,7 @@ class BuildRecord(Base):
         Index("ix_builds_status_created_at", "status", "created_at"),
         Index("ix_builds_agent_name", "agent_name"),
         Index("ix_builds_created_at", "created_at"),
+        UniqueConstraint("requested_by", "idempotency_key", name="uq_builds_owner_idempotency_key"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -57,7 +59,7 @@ class BuildRecord(Base):
     parent_build_id: Mapped[uuid.UUID | None] = mapped_column(
         Uuid(as_uuid=True), ForeignKey("builds.id", ondelete="SET NULL")
     )
-    idempotency_key: Mapped[str | None] = mapped_column(String(128), unique=True)
+    idempotency_key: Mapped[str | None] = mapped_column(String(128))
     task_id: Mapped[str | None] = mapped_column(String(64))
     agentforge_version: Mapped[str | None] = mapped_column(String(32))
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

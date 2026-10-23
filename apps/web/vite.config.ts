@@ -10,7 +10,7 @@ export default defineConfig({
   build: {
     outDir: process.env.AGENTFORGE_WEB_OUT_DIR ?? '../../dist',
     emptyOutDir: true,
-    sourcemap: true,
+    sourcemap: process.env.GENERATE_SOURCEMAP === 'true',
     target: 'es2022',
   },
   server: {
