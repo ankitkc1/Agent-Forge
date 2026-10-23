@@ -2,7 +2,7 @@
 # AgentForge workbench: static build served by an unprivileged nginx that also proxies /api to the
 # control plane, so the browser talks to a single origin (no CORS, streaming builds unbuffered).
 
-FROM node:22-alpine AS build
+FROM node:25-alpine AS build
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --ignore-scripts --no-audit --no-fund
